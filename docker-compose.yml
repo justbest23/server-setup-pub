@@ -1,0 +1,496 @@
+networks:
+  default:
+    external: true
+    name: proxiable
+
+services:
+
+
+#*****************************
+#        DASHBOARDS
+#*****************************
+
+## HOMARR ##
+
+
+  homarr:
+    container_name: homarr
+    image: ghcr.io/homarr-labs/homarr:latest
+    restart: unless-stopped
+    user: 0:0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock # Optional, only if you want docker integration
+      - ./homarr/appdata:/appdata
+    environment:
+      - SECRET_ENCRYPTION_KEY="{$HOMARR_KEY}"
+    ports:
+      - 7575:7575
+
+
+
+#*****************************
+#        MONITORING
+#*****************************
+
+  dashdot:
+    image: mauricenino/dashdot:nvidia
+    container_name: dashdot
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities:
+                - gpu
+    environment:
+      DASHDOT_ENABLE_CPU_TEMPERATURE: 'true'
+      DASHDOT_ACCEPT_OHNO: 'true'
+      DASHDOT_SHOW_HOST: 'true'
+      DASHDOT_USE_DOCKER: 'true'
+      DASHDOT_WIDGET_LIST: 'os,cpu,storage,ram,network,gpu'
+    volumes:
+      - /:/mnt/host:ro
+      - /mnt/MediaArray:/mnt/MediaArray:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /etc/machine-id:/etc/machine-id:ro
+    privileged: true
+
+
+#*****************************
+#  MEDIA DELIVERY SERVICES
+#*****************************
+
+  # https://docs.lscr.io/linuxserver.io/images/docker-plex
+  plex:
+    image: lscr.io/linuxserver/plex:latest
+    container_name: plex
+    network_mode: "host"
+    environment:
+      TZ: "Africa/Johannesburg"
+      PLEX_CLAIM: "${PLEX_CLAIM}"
+      VERSION: "docker"  # Optional: disables auto-updates unless changed
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
+    volumes:
+      - /etc/plex:/config
+      - /mnt/Media-Array:/mnt/Media-Array
+    tmpfs:
+      - /tmp
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    restart: unless-stopped
+
+
+
+  jellyfin:
+    image: jellyfin/jellyfin:latest
+    container_name: jellyfin
+    network_mode: "host"
+    user: "0:0"
+    volumes:
+      - /etc/jellyfin:/etc/jellyfin
+      - /var/lib/jellyfin:/var/lib/jellyfin
+      - /var/log/jellyfin:/var/log/jellyfin
+      - /var/cache/jellyfin:/var/cache/jellyfin
+      - /mnt/Media-Array:/mnt/Media-Array
+    environment:
+      JELLYFIN_CONFIG_DIR: "/etc/jellyfin"
+      JELLYFIN_DATA_DIR: "/var/lib/jellyfin"
+      JELLYFIN_LOG_DIR: "/var/log/jellyfin"
+      JELLYFIN_CACHE_DIR: "/var/cache/jellyfin"
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+
+#*****************************
+#        MEDIA-CLEANUP
+#*****************************
+
+  maintainerr:
+    image: ghcr.io/jorenn92/maintainerr:latest # or jorenn92/maintainerr:latest
+    container_name: maintainerr
+    user: 0:0
+    volumes:
+      - type: bind
+        source: /opt/mediaserver/maintainerr/data
+        target: /opt/data
+    environment:
+      TZ: "${TZ}"
+#      - BASE_PATH=/maintainerr # uncomment if you're serving maintainerr from a subdirectory
+#      - UI_HOSTNAME=:: # uncomment if you want to listen on IPv6 instead (default 0.0.0.0)
+#      - UI_PORT=6247 # uncomment to change the UI port (default 6246). Useful if you're on a network where the port is already in use
+#      - API_PORT=3002 # uncomment to change the API port (default 3001). Useful if you're on a network where the port is already in use
+    ports:
+      - 6246:6246
+    restart: unless-stopped
+
+
+
+#*****************************
+#  NGINX PROXY MANAGER
+#****************************
+
+  app:
+    image: 'jc21/nginx-proxy-manager:latest'
+    container_name: nginx_proxy
+    restart: unless-stopped
+#    network_mode: host
+    ports:
+     - 80:80       # Public HTTP
+     - 443:443     # Public HTTPS
+     - 81:81       # Admin Web Portal
+      # Add any other Stream port you want to expose
+      # - '21:21' # FTP
+
+    # Uncomment the next line if you uncomment anything in the section
+    environment:
+      PUID: "${PUID}"
+      PGID: "${PGID}"
+      # Uncomment this if you want to change the location of
+      # the SQLite DB file within the container
+      # DB_SQLITE_FILE: "/data/database.sqlite"
+
+      # Uncomment this if IPv6 is not enabled on your host
+      DISABLE_IPV6: 'true'
+
+    volumes:
+      - /opt/nginx-proxy/data:/data
+      - /opt/nginx-proxy/letsencrypt:/etc/letsencrypt
+#      - /opt/nginx-proxy/config.json:/app/config/production.json
+      - /opt/nginx-proxy:/var/lib/mysql
+
+    healthcheck:
+      test: ["CMD", "/bin/check-health"]
+      interval: 10s
+      timeout: 3s
+
+#*****************************
+#  STATS PAGES
+#*****************************
+
+## Tautulli ##
+
+  tautulli:
+    image: ghcr.io/tautulli/tautulli
+    container_name: tautulli
+    restart: unless-stopped
+    volumes:
+      - ${CONFIG_DIR}/tautulli:/config
+    environment:
+      PUID: "${PUID}"
+      PGID: "${PGID}"
+      TZ: "${TZ}"
+    ports:
+      - 8181:8181
+
+## Jellystat ##
+
+  # https://github.com/CyferShepard/jellystat
+  jellystat-db:
+    image: postgres:15.2
+    container_name: "jellystat-db"
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "${JELLYSTAT_DB_USER:-postgres}"
+      POSTGRES_PASSWORD: "${JELLYSTAT_DB_PASS:-changeme}"
+      TZ: "${TZ}"
+    volumes:
+      - "${CONFIG_DIR}/jellystat/postgres:/var/lib/postgresql/data"
+    shm_size: 1gb
+
+  jellystat:
+    image: cyfershepard/jellystat:latest
+    container_name: "jellystat"
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "${JELLYSTAT_DB_USER:-postgres}"
+      POSTGRES_PASSWORD: "${JELLYSTAT_DB_PASS:-changeme}"
+      POSTGRES_IP: "jellystat-db"
+      POSTGRES_PORT: 5432
+      JWT_SECRET: "${JELLYSTAT_JWT_SECRET:-supersecretkey}"
+      TZ: "${TZ}"
+    volumes:
+      - "${CONFIG_DIR}/jellystat/backup:/app/backend/backup-data"
+    ports:
+      - "3000:3000"
+    depends_on:
+      - jellystat-db
+
+
+#*****************************
+#  USER CONTENT HELPER SERVICES
+#*****************************
+
+
+## Jellyplex ##
+
+  jellyplex-watched:
+    container_name: jellyplex-watched
+    image: luigi311/jellyplex-watched:latest
+    restart: unless-stopped
+    environment:
+      PUID: "${PUID}"
+      PGID: "${PGID}"
+    env_file:
+      - .env
+
+
+  rhasspy-whisper:
+    image: rhasspy/wyoming-whisper
+    container_name: rhasspy-whisper
+    ports:
+      - "10300:10300"
+    volumes:
+      - /home/troggoman/whisperdata/:/data
+    stdin_open: true
+    command: --model tiny-int8 --language en
+    tty: true
+
+
+  rhasspy-piper:
+    image: rhasspy/wyoming-piper
+    container_name: rhasspy-piper
+    ports:
+      - "10200:10200"
+    volumes:
+      - /home/troggoman/piperdata:/data
+    stdin_open: true
+    tty: true
+    command: --voice en_GB-northern_english_male-medium
+
+
+
+  jellyseerr:
+    container_name: "jellyseer"
+    image: fallenbagel/jellyseerr:latest
+    environment:
+      TZ: "${TZ}"
+      PUID: "${PUID}"
+      PGID: "${PGID}"
+    ports:
+         - 5055:5055
+    volumes:
+         - "${CONFIG_DIR}/jellyseer:/app/config"
+    restart: unless-stopped
+
+  wizarr:
+    container_name: "wizarr"
+    image: ghcr.io/wizarrrr/wizarr:latest
+    restart: unless-stopped
+    environment:
+      PUID: "${PUID}"
+      PGID: "${PGID}"
+      TZ: "${TZ}"
+    ports:
+       - 5690:5690
+    volumes:
+      - "${CONFIG_DIR}/wizarr:/config"
+      - "${CONFIG_DIR}/wizarr-db/database:/data/database"
+
+
+#*****************************
+#  CONTENT MANAGEMENT SERVICES
+#*****************************
+
+
+
+  # https://docs.lscr.io/linuxserver.io/images/docker-sonarr
+  sonarr:
+    container_name: "sonarr"
+    image: lscr.io/linuxserver/sonarr:develop
+    restart: unless-stopped
+    environment:
+      PUID: "${PUID}"
+      PGID: "${PGID}"
+      TZ: "${TZ}"
+    volumes:
+      - "/var/lib/sonarr:/config"
+      - "${MEDIA_DIR}:/media"
+    ports:
+      - "8989:8989"
+
+#https://docs.lscr.io/linuxserver.io/images/docker-radarr
+  radarr:
+    container_name: "radarr"
+    image: lscr.io/linuxserver/radarr:develop
+    restart: unless-stopped
+    environment:
+      PUID: "${PUID}"
+      PGID: "${PGID}"
+      TZ: "${TZ}"
+    volumes:
+      - "/var/lib/radarr:/config"
+      - "${MEDIA_DIR}:/media"
+    ports:
+      - "7878:7878"
+
+
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: "bazarr"
+    environment:
+      PUID: "${PUID}"
+      PGID: "${PGID}"
+      TZ: "${TZ}"
+    volumes:
+      - "${CONFIG_DIR}bazarr/config:/config"
+      - "${MEDIA_DIR}/Movies:/media/Movies" #optional
+      - "${MEDIA_DIR}/TV Shows:/media/TV Shows" #optional
+    ports:
+      - "6767:6767"
+    restart: unless-stopped
+
+
+
+#*****************************
+#  MEDIA ACQUISITION SERVICES
+#*****************************
+
+
+#https://docs.lscr.io/linuxserver.io/images/docker-nzbget
+  nzbget:
+    image: lscr.io/linuxserver/nzbget:latest
+    container_name: "nzbget"
+    restart: unless-stopped
+    environment:
+      PUID: "${PUID}"
+      PGID: "${PGID}"
+      TZ: "${TZ}"
+      NZBGET_USER: "${NZB_USER}"
+      NZBGET_PASS: "${NZB_PASS}"
+    volumes:
+      - "${CONFIG_DIR}/nzbget:/config"
+      - "${MEDIA_DIR}/nzbget:/media/nzbget"
+      - "${NZB_CERTS}:/certs"
+    ports:
+      - "6789:6789"
+
+
+  # DockerHub mirror flaresolverr/flaresolverr:latest
+#  flaresolverr:
+#    image: ghcr.io/flaresolverr/flaresolverr:latest
+#    container_name: media_flaresolverr
+#    restart: unless-stopped
+#    environment:
+#      LOG_LEVEL: "info"
+#      LOG_HTML: "false"
+#      CAPTCHA_SOLVER: "none"
+#      TZ: "${TZ}"
+
+
+#  qbittorrent:
+#    image: lscr.io/linuxserver/qbittorrent:5.0.1
+#    image: linuxserver/qbittorrent:5.0.1-libtorrentv1
+#    container_name: qbittorrent
+#    environment:
+#      - PUID=${PUID}
+#      - PGID=${PGID}
+#      - TZ=${TZ}
+#      - WEBUI_PORT=8080
+#      - TORRENTING_PORT=50124
+#    volumes:
+#      - ${CONFIG_DIR}/qbittorrent:/config
+#      - ${MEDIA_DIR}/:/downloads
+#    ports:
+#      - 8080:8080
+#      - 50124:50124
+#      - 50124:50124/udp
+#    restart: unless-stopped
+
+
+#*****************************
+#  OPTIONAL SERVICES (DISABLED)
+#*****************************
+
+#  calibre:
+#    image: lscr.io/linuxserver/calibre:latest
+#    container_name: calibre
+#    security_opt:
+#      - seccomp:unconfined #optional
+#    environment:
+#      - PUID=${PUID}
+#      - PGID=${PGID}
+#      - TZ=${TZ}
+#      - PASSWORD= #optional
+#      - CLI_ARGS="--disable-ssl"
+#    volumes:
+#      - ${CONFIG_DIR}/calibre:/config
+#      - ${MEDIA_DIR}/:/media
+#    ports:
+#      - 8089:8080
+#      - 8181:8181
+#      - 8088:8081
+#    restart: unless-stopped
+
+
+
+  # https://docs.lscr.io/linuxserver.io/images/docker-syncthing
+  syncthing:
+    image: lscr.io/linuxserver/syncthing:latest
+    container_name: "syncthing"
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TZ}
+    ports:
+      - "8384:8384"
+      - "22000:22000/tcp"
+      - "22000:22000/udp"
+      - "21027:21027/udp"
+    volumes:
+ #     - "${CONFIG_DIR}/syncthing:/config"
+      - "${CONFIG_DIR}:/data/config"
+ #     - "${DOWNLOADS_DIR}:/data/downloads"
+      - "${MEDIA_DIR}/Xiaomi-backup:/xiaomi"
+ #   tmpfs:
+ #     - /tmp
+
+
+
+#  monitoring:
+#    image: nicolargo/glances:ubuntu-latest-full
+#    container_name: "glances"
+#    restart: unless-stopped
+#    environment:
+#      PUID: ${PUID}
+#      PGID: ${PGID}
+#      TZ: ${TZ}
+#      - GLANCES_OPT= "-w --password --gpus"
+#    deploy:
+#      resources:
+#        reservations:
+#          devices:
+#            - driver: nvidia
+#              count: 1
+#              capabilities: [gpu]
+#    volumes:
+#      - /var/run/docker.sock:/var/run/docker.sock:ro
+#      - /etc/os-release:/etc/os-release:ro
+#    pid: host
+#    secrets:
+#      - source: glances_password
+#      - target: /root/.config/glances/glances.pwd
+
+volumes:
+  database:
+    driver: local
+  redis:
+    driver: local
+  rb_data:
+    driver: local
