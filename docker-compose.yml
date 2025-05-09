@@ -369,8 +369,7 @@ services:
       TZ: "${TZ}"
     volumes:
       - "${CONFIG_DIR}bazarr/config:/config"
-      - "${MEDIA_DIR}/Movies:/media/Movies" #optional
-      - "${MEDIA_DIR}/TV Shows:/media/TV Shows" #optional
+      - "${MEDIA_DIR}:/media" #optional
     ports:
       - "6767:6767"
     restart: unless-stopped
