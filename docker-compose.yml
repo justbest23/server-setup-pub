@@ -28,6 +28,22 @@ services:
 
 
 
+  wetty:
+    image: wettyoss/wetty:latest
+    container_name: wetty
+    ports:
+      - "3344:3000"  # Map port 8080 on the host to port 3121 in the container
+    environment:
+      - BASE=/  # Optional if you want to change the path
+    volumes:
+      - /:/host  # Mount the host filesystem into the container
+      - /home/troggoman/.ssh:/root/.ssh:ro
+      - /home/troggoman/.ssh/known_hosts:/root/.ssh/known_hosts
+    command: /bin/bash -c "ssh troggoman@192.168.0.203 -X"  # Launch the host's shell
+#    network_mode: host
+    restart: unless-stopped
+
+
 #*****************************
 #        MONITORING
 #*****************************
@@ -36,6 +52,7 @@ services:
     image: mauricenino/dashdot:nvidia
     container_name: dashdot
     restart: unless-stopped
+    network_mode: "host"
     ports:
       - "3001:3001"
     deploy:
@@ -250,28 +267,28 @@ services:
       - .env
 
 
-  rhasspy-whisper:
-    image: rhasspy/wyoming-whisper
-    container_name: rhasspy-whisper
-    ports:
-      - "10300:10300"
-    volumes:
-      - /home/troggoman/whisperdata/:/data
-    stdin_open: true
-    command: --model tiny-int8 --language en
-    tty: true
+  # rhasspy-whisper:
+  #   image: rhasspy/wyoming-whisper
+  #   container_name: rhasspy-whisper
+  #   ports:
+  #     - "10300:10300"
+  #   volumes:
+  #     - /home/troggoman/whisperdata/:/data
+  #   stdin_open: true
+  #   command: --model tiny-int8 --language en
+  #   tty: true
 
 
-  rhasspy-piper:
-    image: rhasspy/wyoming-piper
-    container_name: rhasspy-piper
-    ports:
-      - "10200:10200"
-    volumes:
-      - /home/troggoman/piperdata:/data
-    stdin_open: true
-    tty: true
-    command: --voice en_GB-northern_english_male-medium
+  # rhasspy-piper:
+  #   image: rhasspy/wyoming-piper
+  #   container_name: rhasspy-piper
+  #   ports:
+  #     - "10200:10200"
+  #   volumes:
+  #     - /home/troggoman/piperdata:/data
+  #   stdin_open: true
+  #   tty: true
+  #   command: --voice en_GB-northern_english_male-medium
 
 
 
@@ -312,30 +329,33 @@ services:
   # https://docs.lscr.io/linuxserver.io/images/docker-sonarr
   sonarr:
     container_name: "sonarr"
-    image: lscr.io/linuxserver/sonarr:develop
+    image: lscr.io/linuxserver/sonarr:latest
     restart: unless-stopped
     environment:
-      PUID: "${PUID}"
-      PGID: "${PGID}"
+      PUID: 1000
+      PGID: 1000
       TZ: "${TZ}"
     volumes:
       - "/var/lib/sonarr:/config"
       - "${MEDIA_DIR}:/media"
+      - "${MEDIA_DIR}/downloads/:/downloads"
+
     ports:
       - "8989:8989"
 
 #https://docs.lscr.io/linuxserver.io/images/docker-radarr
   radarr:
     container_name: "radarr"
-    image: lscr.io/linuxserver/radarr:develop
+    image: lscr.io/linuxserver/radarr:latest
     restart: unless-stopped
     environment:
-      PUID: "${PUID}"
-      PGID: "${PGID}"
+      PUID: 1000
+      PGID: 1000
       TZ: "${TZ}"
     volumes:
       - "/var/lib/radarr:/config"
       - "${MEDIA_DIR}:/media"
+      - "${MEDIA_DIR}/nzbget/downloads/:/downloads"
     ports:
       - "7878:7878"
 
@@ -368,8 +388,8 @@ services:
     container_name: "nzbget"
     restart: unless-stopped
     environment:
-      PUID: "${PUID}"
-      PGID: "${PGID}"
+      PUID: 1000
+      PGID: 1000
       TZ: "${TZ}"
       NZBGET_USER: "${NZB_USER}"
       NZBGET_PASS: "${NZB_PASS}"
@@ -413,6 +433,20 @@ services:
 #    restart: unless-stopped
 
 
+  prowlarr:
+    container_name: prowlarr
+    image: ghcr.io/hotio/prowlarr
+    ports:
+      - "9696:9696"
+    environment:
+      - PUID=${PUID}
+      - PGID=${PUID}
+      - UMASK=002
+      - TZ=${TZ}
+    volumes:
+      - ${CONFIG_DIR}/prowlarr:/config
+
+
 #*****************************
 #  OPTIONAL SERVICES (DISABLED)
 #*****************************
@@ -438,54 +472,6 @@ services:
 #    restart: unless-stopped
 
 
-
-  # https://docs.lscr.io/linuxserver.io/images/docker-syncthing
-  syncthing:
-    image: lscr.io/linuxserver/syncthing:latest
-    container_name: "syncthing"
-    restart: unless-stopped
-    environment:
-      PUID: ${PUID}
-      PGID: ${PGID}
-      TZ: ${TZ}
-    ports:
-      - "8384:8384"
-      - "22000:22000/tcp"
-      - "22000:22000/udp"
-      - "21027:21027/udp"
-    volumes:
- #     - "${CONFIG_DIR}/syncthing:/config"
-      - "${CONFIG_DIR}:/data/config"
- #     - "${DOWNLOADS_DIR}:/data/downloads"
-      - "${MEDIA_DIR}/Xiaomi-backup:/xiaomi"
- #   tmpfs:
- #     - /tmp
-
-
-
-#  monitoring:
-#    image: nicolargo/glances:ubuntu-latest-full
-#    container_name: "glances"
-#    restart: unless-stopped
-#    environment:
-#      PUID: ${PUID}
-#      PGID: ${PGID}
-#      TZ: ${TZ}
-#      - GLANCES_OPT= "-w --password --gpus"
-#    deploy:
-#      resources:
-#        reservations:
-#          devices:
-#            - driver: nvidia
-#              count: 1
-#              capabilities: [gpu]
-#    volumes:
-#      - /var/run/docker.sock:/var/run/docker.sock:ro
-#      - /etc/os-release:/etc/os-release:ro
-#    pid: host
-#    secrets:
-#      - source: glances_password
-#      - target: /root/.config/glances/glances.pwd
 
 volumes:
   database:
